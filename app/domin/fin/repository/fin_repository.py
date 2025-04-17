@@ -1,139 +1,165 @@
-import aiohttp
-import os
-import zipfile
-import xml.etree.ElementTree as ET
-from io import BytesIO
-from dotenv import load_dotenv
-from app.domin.fin.models.schemas import RawFinancialStatement, CompanyInfo, DartApiResponse, StockInfo
-from datetime import datetime
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+import logging
 
-load_dotenv()
+logger = logging.getLogger(__name__)
 
 class FinRepository:
-    def __init__(self):
-        self.api_key = os.getenv("DART_API_KEY")
-        if not self.api_key:
-            raise ValueError("DART API 키가 필요합니다.")
+    def __init__(self, db_session: AsyncSession):
+        self.db_session = db_session
 
-    async def get_company_info(self, company_name: str) -> CompanyInfo:
-        """회사 정보를 조회합니다."""
-        url = "https://opendart.fss.or.kr/api/corpCode.xml"
-        params = {
-            "crtfc_key": self.api_key
-        }
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params) as response:
-                if response.status == 200:
-                    # ZIP 파일 다운로드 및 압축 해제
-                    content = await response.read()
-                    with zipfile.ZipFile(BytesIO(content)) as zip_file:
-                        # CORPCODE.xml 파일 읽기
-                        with zip_file.open('CORPCODE.xml') as xml_file:
-                            tree = ET.parse(xml_file)
-                            root = tree.getroot()
-                            
-                            # 회사명으로 검색
-                            for company in root.findall('.//list'):
-                                corp_name = company.findtext('corp_name')
-                                if corp_name == company_name:
-                                    company_data = {
-                                        "corp_code": company.findtext('corp_code'),
-                                        "corp_name": corp_name,
-                                        "stock_code": company.findtext('stock_code') or "",
-                                        "modify_date": company.findtext('modify_date')
-                                    }
-                                    return CompanyInfo(**company_data)
-                            
-                            raise ValueError(f"회사명 '{company_name}'을 찾을 수 없습니다. 공시회사명을 정확히 입력해주세요.")
-                else:
-                    raise Exception(f"API 요청 실패: {response.status}")
+    async def delete_financial_statements(self, corp_code: str, rcept_no: str) -> None:
+        """재무제표 데이터를 삭제합니다."""
+        query = text("""
+            DELETE FROM fin_statements 
+            WHERE corp_code = :corp_code 
+            AND rcept_no = :rcept_no
+        """)
+        await self.db_session.execute(query, {"corp_code": corp_code, "rcept_no": rcept_no})
+        await self.db_session.commit()
 
-    async def get_stock_info(self, corp_code: str) -> StockInfo:
-        """주식 발행정보를 조회합니다."""
-        url = "https://opendart.fss.or.kr/api/stockTotqySttus.json"
-        current_year = datetime.now().year
-        
-        params = {
-            "crtfc_key": self.api_key,
-            "corp_code": corp_code,
-            "bsns_year": str(current_year),
-            "reprt_code": "11011"  # 사업보고서
-        }
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if data.get("status") == "000":
-                        stock_data = data.get("list", [])[0] if data.get("list") else None
-                        if stock_data:
-                            return StockInfo(
-                                istc_totqy=int(stock_data.get("istc_totqy", "0").replace(",", "")),  # 발행한 주식의 총수
-                                distb_stock_qy=int(stock_data.get("distb_stock_qy", "0").replace(",", "")),  # 유통주식수
-                                tesstk_co=int(stock_data.get("tesstk_co", "0").replace(",", "")),  # 자기주식수
-                            )
-                    raise Exception(f"주식 정보를 찾을 수 없습니다: {data.get('message')}")
-                else:
-                    raise Exception(f"API 요청 실패: {response.status}")
+    async def insert_financial_statement(self, data: dict) -> None:
+        """재무제표 데이터를 저장합니다."""
+        query = text("""
+            INSERT INTO fin_statements (
+                corp_code, corp_name, stock_code, rcept_no, reprt_code,
+                bsns_year, sj_div, sj_nm, account_nm, thstrm_nm,
+                thstrm_amount, frmtrm_nm, frmtrm_amount, bfefrmtrm_nm,
+                bfefrmtrm_amount, ord, currency
+            ) VALUES (
+                :corp_code, :corp_name, :stock_code, :rcept_no, :reprt_code,
+                :bsns_year, :sj_div, :sj_nm, :account_nm, :thstrm_nm,
+                :thstrm_amount, :frmtrm_nm, :frmtrm_amount, :bfefrmtrm_nm,
+                :bfefrmtrm_amount, :ord, :currency
+            )
+        """)
+        await self.db_session.execute(query, data)
+        await self.db_session.commit()
 
-    async def get_financial_statements(self, corp_code: str) -> list[RawFinancialStatement]:
-        """재무제표 데이터를 조회합니다."""
-        statements = []
-        
-        # 1. 재무상태표와 손익계산서 조회
-        url = "https://opendart.fss.or.kr/api/fnlttSinglAcnt.json"
-        params = {
-            "crtfc_key": self.api_key,
-            "corp_code": corp_code,
-            "bsns_year": "2023",
-            "reprt_code": "11011",  # 사업보고서
-            "fs_div": "CFS"  # 연결재무제표
-        }
-        
-        async with aiohttp.ClientSession() as session:
-            # 재무상태표와 손익계산서 조회
-            async with session.get(url, params=params) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    api_response = DartApiResponse(**data)
-                    
-                    if api_response.status == "000":
-                        print(f"BS/IS API 응답 상태: {api_response.status}")
-                        print(f"BS/IS 총 데이터 수: {len(api_response.list) if api_response.list else 0}")
-                        
-                        for item in api_response.list:
-                            if item.get("sj_div") in ["BS", "IS"]:
-                                print(f"처리 중인 BS/IS 항목 - 구분: {item.get('sj_div')}, 계정: {item.get('account_nm')}")
-                                item["thstrm_nm"] = f"{int(item['bsns_year'])}년"
-                                item["frmtrm_nm"] = f"{int(item['bsns_year'])-1}년"
-                                item["bfefrmtrm_nm"] = f"{int(item['bsns_year'])-2}년"
-                                statements.append(RawFinancialStatement(**item))
-                    else:
-                        print(f"BS/IS API 경고: {api_response.message}")
-            
-            # 현금흐름표 조회
-            cf_url = "https://opendart.fss.or.kr/api/fnlttCashFlow.json"
-            async with session.get(cf_url, params=params) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    api_response = DartApiResponse(**data)
-                    
-                    if api_response.status == "000":
-                        print(f"CF API 응답 상태: {api_response.status}")
-                        print(f"CF 총 데이터 수: {len(api_response.list) if api_response.list else 0}")
-                        
-                        for item in api_response.list:
-                            print(f"처리 중인 CF 항목 - 계정: {item.get('account_nm')}")
-                            # CF 데이터 형식을 BS/IS와 동일하게 맞춤
-                            item["sj_div"] = "CF"
-                            item["sj_nm"] = "현금흐름표"
-                            item["thstrm_nm"] = f"{int(item['bsns_year'])}년"
-                            item["frmtrm_nm"] = f"{int(item['bsns_year'])-1}년"
-                            item["bfefrmtrm_nm"] = f"{int(item['bsns_year'])-2}년"
-                            statements.append(RawFinancialStatement(**item))
-                    else:
-                        print(f"CF API 경고: {api_response.message}")
-        
-        print(f"최종 저장된 재무제표 수: {len(statements)}")
-        return statements
+    async def get_statement_summary(self) -> list[dict]:
+        """회사별 재무제표 종류와 데이터 수를 조회합니다."""
+        query = text("""
+            SELECT corp_code, corp_name, sj_div, sj_nm, COUNT(*) as count
+            FROM fin_statements
+            GROUP BY corp_code, corp_name, sj_div, sj_nm
+            ORDER BY corp_code, sj_div
+        """)
+        result = await self.db_session.execute(query)
+        return [dict(row) for row in result]
+
+    async def get_key_financial_items(self) -> list[dict]:
+        """회사별 주요 재무 항목을 조회합니다."""
+        query = text("""
+            SELECT corp_code, corp_name, sj_div, account_nm, thstrm_nm, thstrm_amount
+            FROM fin_statements
+            WHERE account_nm IN (
+                '당기순이익', '영업이익', '영업활동현금흐름', 
+                '자산총계', '부채총계', '자본총계'
+            )
+            ORDER BY corp_code, sj_div, account_nm
+        """)
+        result = await self.db_session.execute(query)
+        return [dict(row) for row in result]
+
+    async def get_company_by_name(self, company_name: str) -> dict:
+        """회사명으로 회사 정보를 조회합니다."""
+        query = text("""
+            SELECT DISTINCT corp_code, corp_name, stock_code
+            FROM fin_statements
+            WHERE corp_name = :company_name
+            LIMIT 1
+        """)
+        result = await self.db_session.execute(query, {"company_name": company_name})
+        row = result.fetchone()
+        if row:
+            # 튜플을 딕셔너리로 변환할 때 컬럼명을 키로 사용
+            return {
+                "corp_code": row[0],
+                "corp_name": row[1],
+                "stock_code": row[2]
+            }
+        return None
+
+    async def get_financial_statements_by_corp_code(self, corp_code: str) -> list[dict]:
+        """회사 코드로 재무제표 데이터를 조회합니다."""
+        query = text("""
+            SELECT *
+            FROM fin_statements
+            WHERE corp_code = :corp_code
+            ORDER BY sj_div, ord
+        """)
+        result = await self.db_session.execute(query, {"corp_code": corp_code})
+        return [dict(row) for row in result]
+
+    async def save_financial_statements(self, statements: list[dict]) -> None:
+        """여러 재무제표 데이터를 일괄 저장합니다."""
+        try:
+            for statement in statements:
+                await self.insert_financial_statement(statement)
+        except Exception as e:
+            logger.error(f"Error saving financial statements: {e}")
+            raise
+
+    async def save_financial_ratios(self, ratios: dict) -> None:
+        """재무비율을 저장합니다."""
+        query = text("""
+            INSERT INTO fin_ratios (
+                corp_code, corp_name, bsns_year,
+                debt_ratio, current_ratio, interest_coverage_ratio,
+                operating_profit_ratio, net_profit_ratio, roe, roa,
+                debt_dependency, cash_flow_debt_ratio,
+                sales_growth, operating_profit_growth, eps_growth
+            ) VALUES (
+                :corp_code, :corp_name, :bsns_year,
+                :debt_ratio, :current_ratio, :interest_coverage_ratio,
+                :operating_profit_ratio, :net_profit_ratio, :roe, :roa,
+                :debt_dependency, :cash_flow_debt_ratio,
+                :sales_growth, :operating_profit_growth, :eps_growth
+            )
+            ON CONFLICT (corp_code, bsns_year) 
+            DO UPDATE SET
+                debt_ratio = EXCLUDED.debt_ratio,
+                current_ratio = EXCLUDED.current_ratio,
+                interest_coverage_ratio = EXCLUDED.interest_coverage_ratio,
+                operating_profit_ratio = EXCLUDED.operating_profit_ratio,
+                net_profit_ratio = EXCLUDED.net_profit_ratio,
+                roe = EXCLUDED.roe,
+                roa = EXCLUDED.roa,
+                debt_dependency = EXCLUDED.debt_dependency,
+                cash_flow_debt_ratio = EXCLUDED.cash_flow_debt_ratio,
+                sales_growth = EXCLUDED.sales_growth,
+                operating_profit_growth = EXCLUDED.operating_profit_growth,
+                eps_growth = EXCLUDED.eps_growth
+        """)
+        await self.db_session.execute(query, ratios)
+        await self.db_session.commit()
+
+    async def get_financial_statements(self, corp_code: str, bsns_year: str) -> list[dict]:
+        """회사 코드와 사업연도로 재무제표 데이터를 조회합니다."""
+        query = text("""
+            SELECT 
+                corp_code,
+                corp_name,
+                stock_code,
+                rcept_no,
+                reprt_code,
+                bsns_year,
+                sj_div,
+                sj_nm,
+                account_nm,
+                thstrm_nm,
+                thstrm_amount,
+                frmtrm_nm,
+                frmtrm_amount,
+                bfefrmtrm_nm,
+                bfefrmtrm_amount,
+                ord,
+                currency
+            FROM fin_statements
+            WHERE corp_code = :corp_code
+            AND bsns_year = :bsns_year
+            ORDER BY sj_div, ord
+        """)
+        result = await self.db_session.execute(query, {"corp_code": corp_code, "bsns_year": bsns_year})
+        rows = result.fetchall()
+        return [dict(zip(result.keys(), row)) for row in rows]

@@ -48,7 +48,7 @@ class RawFinancialStatement(BaseModel):
     frmtrm_nm: str                   # 전기명
     frmtrm_amount: str               # 전기금액
     bfefrmtrm_nm: str               # 전전기명
-    bfefrmtrm_amount: str           # 전전기금액
+    bfefrmtrm_amount: Optional[str] = None  # 전전기금액
     ord: str                        # 계정과목 정렬순서
     currency: str                   # 통화 단위
 
