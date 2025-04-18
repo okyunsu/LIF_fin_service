@@ -33,9 +33,9 @@ class FinController:
     async def get_financial_ratios(self, company_name=None):
         """회사명으로 재무비율을 조회합니다."""
         try:
-            # 회사 코드 조회 (fin_statements 테이블에서)
+            # 회사 코드 조회 (fin_data 테이블에서)
             company_query = text("""
-                SELECT DISTINCT corp_code FROM fin_statements WHERE corp_name = :company_name
+                SELECT DISTINCT corp_code FROM fin_data WHERE corp_name = :company_name
             """)
             company_result = await self.db_session.execute(company_query, {"company_name": company_name})
             company_row = company_result.fetchone()
@@ -67,8 +67,22 @@ class FinController:
                     ROUND(sales_growth, 2) as "매출액증가율",
                     ROUND(operating_profit_growth, 2) as "영업이익증가율",
                     ROUND(eps_growth, 2) as "EPS증가율"
-                FROM fin_ratios 
+                FROM fin_data 
                 WHERE corp_code = :corp_code
+                AND (
+                    debt_ratio IS NOT NULL OR
+                    current_ratio IS NOT NULL OR
+                    interest_coverage_ratio IS NOT NULL OR
+                    operating_profit_ratio IS NOT NULL OR
+                    net_profit_ratio IS NOT NULL OR
+                    roe IS NOT NULL OR
+                    roa IS NOT NULL OR
+                    debt_dependency IS NOT NULL OR
+                    cash_flow_debt_ratio IS NOT NULL OR
+                    sales_growth IS NOT NULL OR
+                    operating_profit_growth IS NOT NULL OR
+                    eps_growth IS NOT NULL
+                )
                 ORDER BY bsns_year DESC
             """)
             
@@ -93,6 +107,8 @@ class FinController:
                     "영업이익증가율": row[11],
                     "EPS증가율": row[12]
                 }
+                # null이 아닌 값만 포함
+                ratio_dict = {k: v for k, v in ratio_dict.items() if v is not None}
                 ratios.append(ratio_dict)
                 
             logging.info(f"조회된 재무비율 수: {len(ratios)}")

@@ -100,9 +100,15 @@ class FinService:
             # DB에서 먼저 조회
             db_company = await self.repository.get_company_by_name(company_name)
             if db_company:
-                db_company["modify_date"] = datetime.now().strftime("%Y%m%d")
+                # 딕셔너리 키를 CompanyInfo 필드와 일치시킴
+                company_data = {
+                    "corp_code": db_company.get("corp_code", ""),
+                    "corp_name": db_company.get("corp_name", company_name),
+                    "stock_code": db_company.get("stock_code", ""),
+                    "modify_date": datetime.now().strftime("%Y%m%d")
+                }
                 try:
-                    return CompanyInfo(**db_company)
+                    return CompanyInfo(**company_data)
                 except Exception as e:
                     logger.warning(f"DB 데이터로 CompanyInfo 생성 실패: {e}")
             
@@ -173,7 +179,7 @@ class FinService:
         try:
             # 이미 데이터가 있는지 확인
             check_query = text("""
-                SELECT COUNT(*) FROM fin_statements 
+                SELECT COUNT(*) FROM fin_data 
                 WHERE corp_name = :company_name
             """)
             result = await self.db_session.execute(check_query, {"company_name": company_name})
@@ -183,7 +189,7 @@ class FinService:
                 logging.info(f"회사 '{company_name}'의 재무제표 데이터가 이미 존재합니다. 크롤링을 건너뜁니다.")
                 # 기존 데이터 반환
                 data_query = text("""
-                    SELECT * FROM fin_statements 
+                    SELECT * FROM fin_data 
                     WHERE corp_name = :company_name
                     ORDER BY bsns_year DESC, sj_div, ord
                 """)
@@ -237,7 +243,7 @@ class FinService:
             
             # 7. 저장된 데이터 조회하여 반환
             data_query = text("""
-                SELECT * FROM fin_statements 
+                SELECT * FROM fin_data 
                 WHERE corp_name = :company_name
                 ORDER BY bsns_year DESC, sj_div, ord
             """)
@@ -293,3 +299,4 @@ class FinService:
         except Exception as e:
             logger.error(f"재무제표 데이터 조회 실패: {str(e)}")
             return {"error": str(e)}
+

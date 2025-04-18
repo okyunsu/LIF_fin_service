@@ -3,8 +3,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domin.fin.controller.fin_controller import FinController
 from app.foundation.infra.database.database import get_db_session
-
-router = APIRouter(prefix="/api/fin", tags=["financial"])
+from app.domin.fin.models.schemas import CompanyNameRequest
+router = APIRouter(tags=["financial"])
 
 @router.get("/ratios/{company_name}")
 async def get_financial_ratios(company_name: str, db: AsyncSession = Depends(get_db_session)):
@@ -19,7 +19,9 @@ async def get_financial(db: AsyncSession = Depends(get_db_session)):
     return await controller.get_financial()
 
 @router.post("/financial", summary="회사명으로 재무제표 조회")
-async def get_financial_by_name(company_name: str, db: AsyncSession = Depends(get_db_session)):
-    """회사명으로 재무제표를 조회합니다."""
+async def get_financial_by_name(
+    payload: CompanyNameRequest,
+    db: AsyncSession = Depends(get_db_session)
+):
     controller = FinController(db)
-    return await controller.get_financial(company_name=company_name)
+    return await controller.get_financial(company_name=payload.company_name)

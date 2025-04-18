@@ -49,7 +49,7 @@ class RawFinancialStatement(BaseModel):
     frmtrm_amount: str               # 전기금액
     bfefrmtrm_nm: str               # 전전기명
     bfefrmtrm_amount: Optional[str] = None  # 전전기금액
-    ord: str                        # 계정과목 정렬순서
+    ord: int                        # 계정과목 정렬순서
     currency: str                   # 통화 단위
 
 class CompanyInfo(BaseModel):
@@ -64,3 +64,6 @@ class StockInfo(BaseModel):
     istc_totqy: int        # 발행한 주식의 총수
     distb_stock_qy: int    # 유통주식수
     tesstk_co: int         # 자기주식수 
+
+class CompanyNameRequest(BaseModel):
+    company_name: str

@@ -5,7 +5,7 @@ docker images
 docker start backend
 docker start database
 docker-compose
-docker exec -it database  psql -U myuser -d mydb
+docker exec -it fin_service_db psql -U postgres -d fin
 
 docker compose logs --tail=500 -f backend
 docker compose logs --tail=500 -f crawler-api

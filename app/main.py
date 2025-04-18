@@ -30,14 +30,14 @@ app = FastAPI()
 # CORS 설정
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[os.getenv("GATEWAY_SERVICE_URL", "http://gateway-service:8080")],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
 
 # 라우터 등록
-app.include_router(fin_router, prefix="/api/fin", tags=["financial"])
+app.include_router(fin_router, tags=["financial"])
 
 current_time: Callable[[], str] = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
