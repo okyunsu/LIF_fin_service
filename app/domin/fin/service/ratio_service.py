@@ -4,14 +4,11 @@ import logging
 from datetime import datetime
 from sqlalchemy import text
 
-from app.domin.fin.repository.fin_repository import FinRepository
-
 logger = logging.getLogger(__name__)
 
 class RatioService:
     def __init__(self, db_session: AsyncSession):
         self.db_session = db_session
-        self.repository = FinRepository(db_session)
 
     def _calculate_growth_rate(self, current: float, previous: float) -> float:
         """성장률을 계산합니다."""
@@ -112,12 +109,6 @@ class RatioService:
                 is_data["영업이익"]["previous"]
             )
         
-        if "당기순이익" in is_data:
-            ratios["eps_growth"] = self._calculate_growth_rate(
-                is_data["당기순이익"]["current"],
-                is_data["당기순이익"]["previous"]
-            )
-        
         return ratios
 
     async def calculate_financial_ratios(self, corp_code: str, bsns_year: str) -> Dict[str, Any]:
@@ -174,16 +165,14 @@ class RatioService:
             insert_query = text("""
                 INSERT INTO fin_data (
                     corp_code, corp_name, bsns_year, sj_div, sj_nm,
-                    debt_ratio, current_ratio, interest_coverage_ratio,
+                    debt_ratio, current_ratio,
                     operating_profit_ratio, net_profit_ratio, roe, roa,
-                    debt_dependency, cash_flow_debt_ratio,
-                    sales_growth, operating_profit_growth, eps_growth
+                    sales_growth, operating_profit_growth
                 ) VALUES (
                     :corp_code, :corp_name, :bsns_year, 'RATIO', '재무비율',
-                    :debt_ratio, :current_ratio, :interest_coverage_ratio,
+                    :debt_ratio, :current_ratio,
                     :operating_profit_ratio, :net_profit_ratio, :roe, :roa,
-                    :debt_dependency, :cash_flow_debt_ratio,
-                    :sales_growth, :operating_profit_growth, :eps_growth
+                    :sales_growth, :operating_profit_growth
                 )
             """)
             
@@ -193,10 +182,9 @@ class RatioService:
                 "corp_name": corp_name,
                 "bsns_year": bsns_year,
                 **{k: ratios.get(k, 0) for k in [
-                    "debt_ratio", "current_ratio", "interest_coverage_ratio",
+                    "debt_ratio", "current_ratio",
                     "operating_profit_ratio", "net_profit_ratio", "roe", "roa",
-                    "debt_dependency", "cash_flow_debt_ratio",
-                    "sales_growth", "operating_profit_growth", "eps_growth"
+                    "sales_growth", "operating_profit_growth"
                 ]}
             }
             
