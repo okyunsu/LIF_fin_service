@@ -1,21 +1,41 @@
-from fastapi import HTTPException
+from fastapi import HTTPException, Query
 from app.domin.fin.service.fin_service import FinService
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 import logging
+from typing import Optional
+
+# 로깅 설정
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 class FinController:
     def __init__(self, db_session: AsyncSession):
+        logger.info("FinController가 초기화되었습니다.")
         self.db_session = db_session
         self.service = FinService(db_session)
 
-    async def get_financial(self, company_name=None):
-        """재무제표 데이터를 조회합니다."""
+    async def get_financial(
+        self, 
+        company_name: str = Query(..., description="회사명"),
+        year: Optional[int] = Query(None, description="조회할 연도. 지정하지 않으면 직전 연도의 데이터를 조회")
+    ):
+        """재무제표 데이터를 조회합니다.
+        
+        Args:
+            company_name: 회사명
+            year: 조회할 연도. None이면 직전 연도의 데이터를 조회
+        """
+        logger.info(f"재무제표 조회 요청 - 회사: {company_name}, 연도: {year}")
         try:
-            if not company_name:
-                raise ValueError("회사명이 필요합니다.")
-                
-            data = await self.service.fetch_and_save_financial_data(company_name=company_name)
+            data = await self.service.fetch_and_save_financial_data(
+                company_name=company_name,
+                year=year
+            )
+            logger.info(f"재무제표 조회 성공 - 회사: {company_name}, 연도: {year}")
             return {
                 "status": "success", 
                 "message": "재무정보가 성공적으로 조회되었습니다.",
@@ -24,14 +44,26 @@ class FinController:
         except ValueError as e:
             # 회사명 관련 오류
             error_message = str(e)
+            logger.error(f"회사명 관련 오류: {error_message}")
             raise HTTPException(status_code=400, detail=error_message)
         except Exception as e:
             # 기타 오류
             error_message = str(e)
+            logger.error(f"기타 오류: {error_message}")
             raise HTTPException(status_code=500, detail=error_message)
 
-    async def get_financial_ratios(self, company_name=None):
-        """회사명으로 재무비율을 조회합니다."""
+    async def get_financial_ratios(
+        self, 
+        company_name: str = Query(..., description="회사명"),
+        year: Optional[int] = Query(None, description="조회할 연도. 지정하지 않으면 직전 연도의 데이터를 조회")
+    ):
+        """회사명으로 재무비율을 조회합니다.
+        
+        Args:
+            company_name: 회사명
+            year: 조회할 연도. None이면 직전 연도의 데이터를 조회
+        """
+        logger.info(f"재무비율 조회 요청 - 회사: {company_name}, 연도: {year}")
         try:
             # 회사 코드 조회 (fin_data 테이블에서)
             company_query = text("""
@@ -41,15 +73,32 @@ class FinController:
             company_row = company_result.fetchone()
             
             if not company_row:
-                logging.warning(f"회사명 '{company_name}'에 해당하는 회사 코드를 찾을 수 없습니다.")
-                return {
-                    "status": "success",
-                    "message": "재무비율이 성공적으로 조회되었습니다.",
-                    "data": []
-                }
+                logger.warning(f"회사명 '{company_name}'에 해당하는 회사 코드를 찾을 수 없습니다.")
+                # 회사 정보가 없으면 DART API에서 데이터를 가져옴
+                data = await self.service.fetch_and_save_financial_data(
+                    company_name=company_name,
+                    year=year
+                )
+                if data["status"] == "error":
+                    logger.warning(f"재무제표 데이터 조회 실패 - 회사: {company_name}")
+                    return {
+                        "status": "success",
+                        "message": "재무비율이 성공적으로 조회되었습니다.",
+                        "data": []
+                    }
+                # 데이터를 가져온 후 다시 회사 코드 조회
+                company_result = await self.db_session.execute(company_query, {"company_name": company_name})
+                company_row = company_result.fetchone()
+                if not company_row:
+                    logger.warning(f"회사 코드를 찾을 수 없습니다 - 회사: {company_name}")
+                    return {
+                        "status": "success",
+                        "message": "재무비율이 성공적으로 조회되었습니다.",
+                        "data": []
+                    }
             
             corp_code = company_row[0]
-            logging.info(f"회사 코드: {corp_code}")
+            logger.info(f"회사 코드: {corp_code}")
             
             # 재무비율 데이터 가져오기 (한글 필드명 사용)
             ratios_query = text("""
@@ -83,11 +132,26 @@ class FinController:
                     operating_profit_growth IS NOT NULL OR
                     eps_growth IS NOT NULL
                 )
-                ORDER BY bsns_year DESC
             """)
             
-            # 재무비율 조회
-            ratios_result = await self.db_session.execute(ratios_query, {"corp_code": corp_code})
+            if year is not None:
+                ratios_query = text(str(ratios_query) + " AND bsns_year = :year")
+                ratios_result = await self.db_session.execute(ratios_query, {"corp_code": corp_code, "year": str(year)})
+                
+                # 해당 연도의 데이터가 없으면 DART API에서 가져옴
+                if ratios_result.rowcount == 0:
+                    logger.info(f"해당 연도({year})의 데이터가 없어 DART API에서 가져옵니다.")
+                    data = await self.service.fetch_and_save_financial_data(
+                        company_name=company_name,
+                        year=year
+                    )
+                    if data["status"] == "success":
+                        # 데이터를 가져온 후 다시 조회
+                        ratios_result = await self.db_session.execute(ratios_query, {"corp_code": corp_code, "year": str(year)})
+            else:
+                # 연도가 지정되지 않았으면 최신 연도의 데이터만 조회
+                ratios_query = text(str(ratios_query) + " AND bsns_year = (SELECT MAX(bsns_year) FROM fin_data WHERE corp_code = :corp_code)")
+                ratios_result = await self.db_session.execute(ratios_query, {"corp_code": corp_code})
             
             # 결과를 딕셔너리로 변환
             ratios = []
@@ -111,7 +175,7 @@ class FinController:
                 ratio_dict = {k: v for k, v in ratio_dict.items() if v is not None}
                 ratios.append(ratio_dict)
                 
-            logging.info(f"조회된 재무비율 수: {len(ratios)}")
+            logger.info(f"조회된 재무비율 수: {len(ratios)}")
             
             return {
                 "status": "success",
@@ -121,10 +185,10 @@ class FinController:
         except ValueError as e:
             # 회사명 관련 오류
             error_message = str(e)
-            logging.error(f"회사명 관련 오류: {error_message}")
+            logger.error(f"회사명 관련 오류: {error_message}")
             raise HTTPException(status_code=400, detail=error_message)
         except Exception as e:
             # 기타 오류
             error_message = str(e)
-            logging.error(f"기타 오류: {error_message}")
+            logger.error(f"기타 오류: {error_message}")
             raise HTTPException(status_code=500, detail=error_message)

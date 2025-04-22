@@ -1,6 +1,7 @@
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 import logging
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -8,14 +9,31 @@ class FinRepository:
     def __init__(self, db_session: AsyncSession):
         self.db_session = db_session
 
-    async def delete_financial_statements(self, corp_code: str, bsns_year: str) -> None:
-        """재무제표 데이터를 삭제합니다."""
+    async def delete_financial_statements(self, corp_code: str, rcept_no: str, year: Optional[int] = None) -> None:
+        """재무제표 데이터를 삭제합니다.
+        
+        Args:
+            corp_code: 회사 코드
+            rcept_no: 접수번호
+            year: 삭제할 연도. None이면 모든 연도의 데이터 삭제
+        """
         query = text("""
             DELETE FROM fin_data 
             WHERE corp_code = :corp_code 
-            AND bsns_year = :bsns_year
+            AND rcept_no = :rcept_no
         """)
-        await self.db_session.execute(query, {"corp_code": corp_code, "bsns_year": bsns_year})
+        
+        if year is not None:
+            query = text("""
+                DELETE FROM fin_data 
+                WHERE corp_code = :corp_code 
+                AND rcept_no = :rcept_no
+                AND bsns_year = :year
+            """)
+            await self.db_session.execute(query, {"corp_code": corp_code, "rcept_no": rcept_no, "year": str(year)})
+        else:
+            await self.db_session.execute(query, {"corp_code": corp_code, "rcept_no": rcept_no})
+        
         await self.db_session.commit()
 
     async def insert_financial_statement(self, data: dict) -> None:
