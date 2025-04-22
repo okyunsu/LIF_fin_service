@@ -10,7 +10,11 @@ class FinController:
         self.service = FinService(db_session)
 
     async def get_financial(self, company_name=None):
+        """재무제표 데이터를 조회합니다."""
         try:
+            if not company_name:
+                raise ValueError("회사명이 필요합니다.")
+                
             data = await self.service.fetch_and_save_financial_data(company_name=company_name)
             return {
                 "status": "success", 
@@ -26,10 +30,6 @@ class FinController:
             error_message = str(e)
             raise HTTPException(status_code=500, detail=error_message)
 
-    async def get_financial_data(self, company_name=None):
-        """재무제표 데이터를 조회합니다."""
-        return await self.service.fetch_and_save_financial_data(company_name)
-        
     async def get_financial_ratios(self, company_name=None):
         """회사명으로 재무비율을 조회합니다."""
         try:

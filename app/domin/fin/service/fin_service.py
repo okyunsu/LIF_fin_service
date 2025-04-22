@@ -12,6 +12,7 @@ from sqlalchemy import text
 from app.domin.fin.models.entities import FinancialStatement
 from app.domin.fin.models.schemas import RawFinancialStatement, CompanyInfo, DartApiResponse, StockInfo
 from app.domin.fin.repository.fin_repository import FinRepository
+from app.domin.fin.service.ratio_service import RatioService
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,7 @@ class FinService:
         """서비스 초기화"""
         self.db_session = db_session
         self.repository = FinRepository(db_session)
+        self.ratio_service = RatioService(db_session)
         load_dotenv()
         self.api_key = os.getenv("DART_API_KEY")
         if not self.api_key:
@@ -189,8 +191,17 @@ class FinService:
                 logging.info(f"회사 '{company_name}'의 재무제표 데이터가 이미 존재합니다. 크롤링을 건너뜁니다.")
                 # 기존 데이터 반환
                 data_query = text("""
-                    SELECT * FROM fin_data 
+                    SELECT 
+                        bsns_year,
+                        sj_div,
+                        sj_nm,
+                        account_nm,
+                        thstrm_amount,
+                        frmtrm_amount,
+                        bfefrmtrm_amount
+                    FROM fin_data 
                     WHERE corp_name = :company_name
+                    AND sj_div != 'RATIO'
                     ORDER BY bsns_year DESC, sj_div, ord
                 """)
                 data_result = await self.db_session.execute(data_query, {"company_name": company_name})
@@ -198,7 +209,6 @@ class FinService:
                 # 결과를 딕셔너리로 변환
                 data = []
                 for row in data_result:
-                    # 행의 컬럼 이름과 값을 가져옴
                     row_dict = {}
                     for idx, column in enumerate(data_result.keys()):
                         row_dict[column] = row[idx]
@@ -231,11 +241,9 @@ class FinService:
             await self.repository.save_financial_statements(statement_data)
             
             # 6. 재무비율 계산 및 저장
-            from app.domin.fin.service.ratio_service import RatioService
-            ratio_service = RatioService(self.db_session)
             bsns_year = statements[0].bsns_year if statements else None
             if bsns_year:
-                ratios = await ratio_service.calculate_and_save_ratios(
+                ratios = await self.ratio_service.calculate_and_save_ratios(
                     corp_code=company_info.corp_code,
                     corp_name=company_info.corp_name,
                     bsns_year=bsns_year
@@ -243,8 +251,17 @@ class FinService:
             
             # 7. 저장된 데이터 조회하여 반환
             data_query = text("""
-                SELECT * FROM fin_data 
+                SELECT 
+                    bsns_year,
+                    sj_div,
+                    sj_nm,
+                    account_nm,
+                    thstrm_amount,
+                    frmtrm_amount,
+                    bfefrmtrm_amount
+                FROM fin_data 
                 WHERE corp_name = :company_name
+                AND sj_div != 'RATIO'
                 ORDER BY bsns_year DESC, sj_div, ord
             """)
             data_result = await self.db_session.execute(data_query, {"company_name": company_name})
@@ -252,7 +269,6 @@ class FinService:
             # 결과를 딕셔너리로 변환
             data = []
             for row in data_result:
-                # 행의 컬럼 이름과 값을 가져옴
                 row_dict = {}
                 for idx, column in enumerate(data_result.keys()):
                     row_dict[column] = row[idx]
@@ -270,33 +286,4 @@ class FinService:
                 "status": "error",
                 "message": str(e)
             }
-
-    async def get_statement_summary(self) -> List[Dict[str, Any]]:
-        """회사별 재무제표 종류와 데이터 수를 조회합니다."""
-        return await self.repository.get_statement_summary()
-
-    async def get_key_financial_items(self) -> List[Dict[str, Any]]:
-        """회사별 주요 재무 항목을 조회합니다."""
-        return await self.repository.get_key_financial_items()
-
-    async def get_financial_data(self, company_name: str = None) -> Dict[str, Any]:
-        """재무제표 데이터를 조회합니다."""
-        try:
-            if not company_name:
-                return {"error": "회사명이 필요합니다."}
-
-            company_info = await self.get_company_info(company_name)
-            financial_statements = await self.repository.get_financial_statements_by_corp_code(company_info.corp_code)
-
-            if not financial_statements:
-                return {"error": "재무제표 데이터를 찾을 수 없습니다."}
-
-            return {
-                "company_info": company_info.model_dump(),
-                "financial_statements": financial_statements
-            }
-
-        except Exception as e:
-            logger.error(f"재무제표 데이터 조회 실패: {str(e)}")
-            return {"error": str(e)}
 
